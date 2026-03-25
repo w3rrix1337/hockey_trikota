@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>HOCKEY</title>
+    <style>
+        :root { --red: #ff3333; --blue: #3385ff; --bg: #0a0a0a; }
+        body { margin: 0; background: var(--bg); color: white; font-family: 'Arial Black', sans-serif; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; touch-action: none; }
+        #app { position: relative; width: 800px; height: 500px; background: #fff; border: 10px solid #222; border-radius: 20px; overflow: hidden; box-shadow: 0 0 40px rgba(0,0,0,0.8); }
+        @media (max-width: 820px) { #app { transform: scale(calc(100vw / 840)); transform-origin: center; } }
+        canvas { display: block; width: 100%; height: 100%; }
+        #ui { position: absolute; top: 20px; left: 0; width: 100%; display: flex; justify-content: center; z-index: 10; pointer-events: none; }
+        #score-main { font-size: 42px; background: #111; color: #fff; padding: 5px 30px; border-radius: 12px; font-weight: 900; border: 2px solid #333; }
+        .screen { position: absolute; inset: 0; background: rgba(0,0,0,0.95); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100; text-align: center; }
+        .hidden { display: none !important; }
+        .char-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }
+        .char-card { background: #222; padding: 10px; border-radius: 12px; cursor: pointer; border: 3px solid transparent; transition: 0.2s; min-width: 100px; }
+        .char-card.selected { border-color: #5f5; background: #333; }
+        .char-thumb { width: 70px; height: 70px; border-radius: 50%; background: #444; object-fit: cover; }
+        #goal-overlay { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; z-index: 200; pointer-events: none; opacity: 0; transition: 0.3s; }
+        #goal-overlay.show { background: rgba(0,0,0,0.5); opacity: 1; }
+        #goal-text { font-size: 120px; color: white; transform: scale(0.5); font-weight: 900; text-shadow: 0 0 30px #000; transition: 0.5s cubic-bezier(0.17, 0.89, 0.32, 1.49); }
+        #goal-overlay.show #goal-text { transform: scale(1); }
+        .stats-card { background: #1a1a1a; padding: 20px; border-radius: 15px; margin-bottom: 15px; border: 1px solid #333; min-width: 300px; }
+        input { padding: 12px; font-size: 20px; border-radius: 8px; border: 2px solid #444; width: 260px; text-align: center; background: #000; color: white; }
+        button { padding: 16px 60px; font-size: 26px; background: var(--red); color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: 900; box-shadow: 0 5px 0 #800; }
+        button:active { transform: translateY(3px); box-shadow: 0 2px 0 #800; }
+        button:disabled { background: #555; box-shadow: 0 5px 0 #222; }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div id="ui" class="hidden">
+        <div id="score-main">0 : 0</div>
+    </div>
+    <div id="goal-overlay"><div id="goal-text">GOAL!</div></div>
+    <div id="menu" class="screen">
+        <h1 style="font-size:80px; margin:0; letter-spacing:-5px;">HOCKEY</h1>
+        <div id="profile-area" class="stats-card"></div>
+        <div class="char-grid" id="char-selector"></div>
+        <button id="start-btn" onclick="startGame()" disabled>ИГРАТЬ</button>
+        <p style="margin-top:15px; font-size:13px; text-decoration:underline; cursor:pointer; opacity:0.4;" onclick="resetNick()">Сменить ник</p>
+    </div>
+    <div id="result-screen" class="screen hidden">
+        <h1 id="res-title" style="font-size:50px; margin:0;">КОНЕЦ МАТЧА</h1>
+        <div class="stats-card">
+            <h2 id="res-score-final" style="font-size:60px; margin:10px 0;">0 : 0</h2>
+            <div id="res-elo-change" style="font-size:28px; font-weight:900;">+0 ELO</div>
+            <p id="res-total-elo" style="opacity:0.8;">Рейтинг: 1000</p>
+        </div>
+        <button onclick="backToMenu()">В МЕНЮ</button>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('sw.js').then(reg => {
+                console.log('Offline mode ready.');
+            }).catch(err => console.log('SW error:', err));
+        });
+    }
+
+    const ASSETS = {
+        goalSound: "https://raw.githubusercontent.com/w3rrix1337/hockey_trikota/main/gol_azul.mp3",
+        hitSound: "https://raw.githubusercontent.com/w3rrix1337/hockey_trikota/main/hit1.mp3",
+        finishSound: "https://raw.githubusercontent.com/w3rrix1337/hockey_trikota/main/fin_1_everyone.mp3",
+        puckImg: "https://raw.githubusercontent.com/w3rrix1337/hockey_trikota/main/puck.png",
+        chars: {
+            "ГОНЯ": "https://raw.githubusercontent.com/w3rrix1337/hockey_trikota/main/paddle1.png",
+            "КАРАМЕЛЬКА": "https://raw.githubusercontent.com/w3rrix1337/hockey_trikota/main/paddle2.png",
+            "КОМПОТ": "https://raw.githubusercontent.com/w3rrix1337/hockey_trikota/main/paddle5.png",
+            "КОРЖИК": "https://raw.githubusercontent.com/w3rrix1337/hockey_trikota/main/paddle6.png"
+        }
+    };
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 800; canvas.height = 500;
+
+    const sounds = {
+        goal: new Audio(ASSETS.goalSound),
+        hit: new Audio(ASSETS.hitSound),
+        finish: new Audio(ASSETS.finishSound)
+    };
+
+    const puckImg = new Image(); puckImg.src = ASSETS.puckImg;
+    const charImages = {};
+    Object.keys(ASSETS.chars).forEach(name => {
+        charImages[name] = new Image();
+        charImages[name].src = ASSETS.chars[name];
+    });
+
+    let user = {
+        name: localStorage.getItem('h_name') || '',
+        elo: localStorage.getItem('h_elo') !== null ? parseInt(localStorage.getItem('h_elo')) : 1000
+    };
+
+    let selectedChar = null, botChar = null;
+    let session = { active: false, ps: 0, bs: 0, lastWinner: null };
+    let puck = { x: 400, y: 250, r: 18, dx: 0, dy: 0 };
+    let player = { x: 150, y: 250, r: 35, active: false, lx: 150, ly: 250, vx: 0, vy: 0 };
+    let bot = { x: 650, y: 250, r: 35, targetX: 650, targetY: 250, wait: 0 };
+
+    function renderMenu() {
+        const area = document.getElementById('profile-area');
+        area.innerHTML = user.name ?
+            `<h2 style="margin:0; color:var(--red)">${user.name}</h2><p style="font-weight:900; margin:5px 0;">ELO: ${user.elo}</p>` :
+            `<input type="text" id="nick-field" placeholder="ВВЕДИТЕ НИК" maxlength="12">`;
+        const selector = document.getElementById('char-selector');
+        selector.innerHTML = '';
+        Object.keys(ASSETS.chars).forEach(name => {
+            const div = document.createElement('div');
+            div.className = 'char-card' + (selectedChar === name ? ' selected' : '');
+            div.innerHTML = `<img src="${ASSETS.chars[name]}" class="char-thumb"><br><span>${name}</span>`;
+            div.onclick = () => { selectedChar = name; document.getElementById('start-btn').disabled = false; renderMenu(); };
+            selector.appendChild(div);
+        });
+    }
+    renderMenu();
+
+    function resetNick() { user.name = ''; localStorage.removeItem('h_name'); renderMenu(); }
+
+    function getMousePos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        return { x: (clientX - rect.left) * (800 / rect.width), y: (clientY - rect.top) * (500 / rect.height) };
+    }
+
+    function handleStart(e) { if (!session.active) return; const pos = getMousePos(e); if (Math.hypot(pos.x - player.x, pos.y - player.y) < 80) player.active = true; }
+    function handleMove(e) { if (!player.active || !session.active) return; if (e.cancelable) e.preventDefault(); const pos = getMousePos(e); player.vx = pos.x - player.lx; player.vy = pos.y - player.ly; player.x = Math.max(player.r, Math.min(pos.x, 390)); player.y = Math.max(player.r, Math.min(pos.y, 500 - player.r)); player.lx = player.x; player.ly = player.y; }
+    function handleEnd() { player.active = false; }
+
+    canvas.addEventListener('mousedown', handleStart);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    canvas.addEventListener('touchstart', handleStart, {passive: false});
+    window.addEventListener('touchmove', handleMove, {passive: false});
+    window.addEventListener('touchend', handleEnd);
+
+    function startGame() {
+        if (!user.name) {
+            const val = document.getElementById('nick-field').value.trim();
+            if (!val) return;
+            user.name = val; localStorage.setItem('h_name', val);
+        }
+        const names = Object.keys(ASSETS.chars);
+        botChar = names.filter(n => n !== selectedChar)[Math.floor(Math.random()*3)];
+        document.getElementById('menu').classList.add('hidden');
+        document.getElementById('ui').classList.remove('hidden');
+        session.active = true; session.ps = 0; session.bs = 0;
+        resetPuck(); gameLoop();
+    }
+
+    function resetPuck() { puck.x = session.lastWinner === 'player' ? 600 : (session.lastWinner === 'bot' ? 200 : 400); puck.y = 250; puck.dx = 0; puck.dy = 0; bot.x = 650; bot.y = 250; }
+
+    function triggerGoal(w) {
+        session.active = false; session.lastWinner = w;
+        sounds.goal.currentTime = 0; sounds.goal.play().catch(()=>{});
+        document.getElementById('goal-overlay').classList.add('show');
+        document.getElementById('score-main').innerText = `${session.ps} : ${session.bs}`;
+        setTimeout(() => {
+            document.getElementById('goal-overlay').classList.remove('show');
+            if (session.ps >= 5 || session.bs >= 5) endGame();
+            else { resetPuck(); session.active = true; gameLoop(); }
+        }, 1500);
+    }
+
+    function gameLoop() {
+        if (!session.active) return;
+        puck.x += puck.dx; puck.y += puck.dy;
+        puck.dx *= 0.985; puck.dy *= 0.985;
+        if (puck.y < puck.r || puck.y > 500 - puck.r) { puck.dy *= -0.85; puck.y = puck.y < puck.r ? puck.r : 500 - puck.r; }
+        if (puck.x < puck.r || puck.x > 800 - puck.r) {
+            if (puck.y > 160 && puck.y < 340) {
+                if (puck.x < 400) session.bs++; else session.ps++;
+                triggerGoal(puck.x < 400 ? 'bot' : 'player'); return;
+            }
+            puck.dx *= -0.85; puck.x = puck.x < puck.r ? puck.r : 800 - puck.r;
+        }
+        let corner = puck.x > 620 && (puck.y < 120 || puck.y > 380);
+        if (bot.wait > 0) { bot.wait--; bot.targetX = 720; bot.targetY = 250; }
+        else if (puck.x > 450) { bot.targetX = puck.x + 10; bot.targetY = puck.y; }
+        else { bot.targetX = 700; bot.targetY = 250 + (puck.y - 250)*0.5; }
+        bot.x += (bot.targetX - bot.x) * 0.045;
+        bot.y += (bot.targetY - bot.y) * 0.045;
+        checkHit(player, puck, true);
+        checkHit(bot, puck, false);
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    function checkHit(m, p, isP) {
+        let d = Math.hypot(p.x - m.x, p.y - m.y);
+        if (d < m.r + p.r) {
+            sounds.hit.currentTime = 0; sounds.hit.play().catch(()=>{});
+            let a = Math.atan2(p.y - m.y, p.x - m.x);
+            let s = isP ? Math.min(22, 7 + Math.hypot(m.vx, m.vy)*0.7) : 9;
+            p.dx = Math.cos(a) * s; p.dy = Math.sin(a) * s;
+            p.x = m.x + Math.cos(a) * (m.r + p.r + 2);
+            p.y = m.y + Math.sin(a) * (m.r + p.r + 2);
+            if (!isP) bot.wait = 25;
+        }
+    }
+
+    function endGame() {
+        session.active = false;
+        const win = session.ps >= 5;
+        sounds.finish.currentTime = 0; sounds.finish.play().catch(()=>{});
+        const diff = (session.ps - session.bs) * 10;
+        user.elo = Math.max(0, user.elo + diff);
+        localStorage.setItem('h_elo', user.elo);
+        document.getElementById('res-title').innerText = win ? "ПОБЕДА!" : "ПОРАЖЕНИЕ";
+        document.getElementById('res-title').style.color = win ? "#5f5" : "#f33";
+        document.getElementById('res-score-final').innerText = `${session.ps} : ${session.bs}`;
+        document.getElementById('res-elo-change').innerText = (diff >= 0 ? "+" : "") + diff + " ELO";
+        document.getElementById('res-total-elo').innerText = "Рейтинг: " + user.elo;
+        document.getElementById('result-screen').classList.remove('hidden');
+    }
+
+    function backToMenu() {
+        sounds.finish.pause(); sounds.finish.currentTime = 0;
+        document.getElementById('result-screen').classList.add('hidden');
+        document.getElementById('ui').classList.add('hidden');
+        document.getElementById('menu').classList.remove('hidden');
+        renderMenu();
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, 800, 500);
+        ctx.strokeStyle = "#eee"; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(400,0); ctx.lineTo(400,500); ctx.stroke();
+        ctx.beginPath(); ctx.arc(400,250,60,0,Math.PI*2); ctx.stroke();
+        ctx.fillStyle = "#222"; ctx.fillRect(0, 160, 10, 180); ctx.fillRect(790, 160, 10, 180);
+        ctx.drawImage(puckImg, puck.x - puck.r, puck.y - puck.r, puck.r*2, puck.r*2);
+        drawC(player.x, player.y, player.r, selectedChar, "var(--red)");
+        drawC(bot.x, bot.y, bot.r, botChar, "var(--blue)");
+    }
+
+    function drawC(x, y, r, name, col) {
+        ctx.save(); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.clip();
+        if (charImages[name]) ctx.drawImage(charImages[name], x-r, y-r, r*2, r*2);
+        ctx.restore();
+        ctx.strokeStyle = col; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.stroke();
+    }
+</script>
+</body>
+</html>
